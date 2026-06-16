@@ -2,21 +2,40 @@ import time
 import pytest
 import requests
 
-# Auth endpoints (register/login/logout/refresh/validate/authenticate)
-# route: gateway /api/v1/authentication/** → authservice → userservice
-AUTH_BASE_URL = "http://localhost:1110/api/v1/authentication/users"
+# ── Hosts ────────────────────────────────────────────────────────────────────
+_MICROSERVICE_HOST = "http://localhost:1110"
+_MONOLITH_HOST     = "http://localhost:8081"
 
-# CRUD + profile-settings endpoints
-# route: gateway /api/v1/users/** → userservice directly
-USERS_BASE_URL = "http://localhost:1110/api/v1/users"
+# ── Microservice URL constants ────────────────────────────────────────────────
+_MS_BASE_URL        = f"{_MICROSERVICE_HOST}/api/v1"
+_MS_AUTH_BASE_URL   = f"{_MS_BASE_URL}/authentication/users"
+_MS_REGISTER_URL    = f"{_MS_AUTH_BASE_URL}/register"
+_MS_LOGIN_URL       = f"{_MS_AUTH_BASE_URL}/login"
+_MS_USERS_URL       = f"{_MS_BASE_URL}/users"
+_MS_BFF_BASE_URL    = f"{_MICROSERVICE_HOST}/api/bff"
+_MS_BFF_LOGIN_URL   = f"{_MS_BFF_BASE_URL}/auth/login"
+_MS_BFF_ME_URL      = f"{_MS_BFF_BASE_URL}/auth/me"
 
-# Employee service base URL (gateway routes all /api/v1/employees/** → userservice)
-EMPLOYEES_BASE_URL = "http://localhost:1110/api/v1"
+# ── Monolith URL constants ────────────────────────────────────────────────────
+_MONO_BASE_URL      = f"{_MONOLITH_HOST}/api/v1"
+_MONO_AUTH_BASE_URL = f"{_MONO_BASE_URL}/authentication/users"
+_MONO_REGISTER_URL  = f"{_MONO_AUTH_BASE_URL}/register"
+_MONO_LOGIN_URL     = f"{_MONO_AUTH_BASE_URL}/login"
+_MONO_USERS_URL     = f"{_MONO_BASE_URL}/users"
 
 # Password rules (from PasswordSecurityProperties defaults):
 #   minLength=12, requires upper+lower+digit+special, no 3-char sequences/repeats.
 # "Jk#9mWpL@2vN" — 13 chars, all char classes, no sequences, no repeats of 3+.
 _PASSWORD = "Jk#9mWpL@2vN"
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--monolith",
+        action="store_true",
+        default=False,
+        help="Run tests against the monolith (localhost:8081) instead of the microservice gateway (localhost:1110).",
+    )
 
 
 def pytest_configure(config):
@@ -31,20 +50,26 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "employee_metadata: employee audit log, status history, preferences, settings, SSN tests")
 
 
-@pytest.fixture(scope="session")
-def base_url():
-    return AUTH_BASE_URL
-
+# ── URL fixtures (resolved once per session based on --monolith flag) ─────────
 
 @pytest.fixture(scope="session")
-def users_url():
-    return USERS_BASE_URL
+def is_monolith(request):
+    return request.config.getoption("--monolith")
 
 
 @pytest.fixture(scope="session")
-def emp_url():
-    """Base URL for all employee service endpoints routed through the gateway."""
-    return EMPLOYEES_BASE_URL
+def base_url(is_monolith):
+    return _MONO_AUTH_BASE_URL if is_monolith else _MS_AUTH_BASE_URL
+
+
+@pytest.fixture(scope="session")
+def users_url(is_monolith):
+    return _MONO_USERS_URL if is_monolith else _MS_USERS_URL
+
+
+@pytest.fixture(scope="session")
+def emp_url(is_monolith):
+    return _MONO_BASE_URL if is_monolith else _MS_BASE_URL
 
 
 @pytest.fixture(scope="session")
@@ -52,18 +77,16 @@ def login_payload(auth_tokens):
     return {"userName": auth_tokens["userName"], "password": _PASSWORD}
 
 
-_BFF_LOGIN_URL = "http://localhost:1110/api/bff/auth/login"
+def _setup_session_user(register_url, login_url, bff_login_url, bff_me_url):
+    """Register a fresh user, login, and return tokens + an authenticated session.
 
+    Microservice mode:
+      - Register + raw-token login go through the auth service.
+      - BFF login (POST /api/bff/auth/login) establishes the APPSESSION cookie
+        the gateway's JwtAuthenticationFilter requires for session-protected routes.
 
-def _setup_session_user(base_url):
-    """Register a fresh user, login twice, and return tokens + an authenticated session.
-
-    - Registration and raw-token login go through the auth service
-      (POST /api/v1/authentication/users/login).
-    - The BFF login (POST /api/bff/auth/login) is called separately on the same
-      requests.Session so the gateway sets the APPSESSION cookie.  The running
-      JwtAuthenticationFilter reads ACCESS_TOKEN from that server-side session;
-      without the APPSESSION cookie every session-protected request gets 401.
+    Monolith mode (bff_login_url=None):
+      - No BFF layer; register + direct login only.
 
     Retries once on 500 to work around a service-side race in PasswordService.
     """
@@ -78,72 +101,66 @@ def _setup_session_user(base_url):
             "lastName": "Tester",
         }
 
-        # Register
-        reg = requests.post(f"{base_url}/register", json=payload)
+        reg = requests.post(register_url, json=payload)
         if reg.status_code != 200:
             if attempt == 0:
                 time.sleep(0.5)
                 continue
             pytest.fail(f"Setup register failed: {reg.status_code} {reg.text}")
 
-        # Auth-service login — get raw tokens for fixtures that need them
-        # login_resp = requests.post(
-        #     f"{base_url}/login",
-        #     json={"userName": uid, "password": _PASSWORD},
-        # )
-        # if login_resp.status_code != 200:
-        #     if attempt == 0:
-        #         time.sleep(1)
-        #         continue
-        #     pytest.fail(f"Setup login failed after retry: {login_resp.status_code} {login_resp.text}")
-        # body = login_resp.json()
-        # access_token  = body["response"]["accessToken"]
-        # refresh_token = body["response"]["refreshToken"]
-
-        # BFF login — establishes the APPSESSION cookie the gateway filter checks,
-        # and also returns tokens via the session for raw-token fixtures.
         session = requests.Session()
-        bff_resp = session.post(
-            _BFF_LOGIN_URL,
-            json={"userName": uid, "password": _PASSWORD},
-        )
-        if bff_resp.status_code != 200:
-            if attempt == 0:
-                time.sleep(1)
-                continue
-            pytest.fail(f"BFF login failed: {bff_resp.status_code} {bff_resp.text}")
 
-        # Issue a GET so the BFF's csrfCookieWebFilter writes the XSRF-TOKEN cookie.
-        # The CSRF filter only sets the cookie when a CsrfToken attribute is present on
-        # the exchange; login is CSRF-exempt so the cookie may not appear until a GET.
-        session.get("http://localhost:1110/api/bff/auth/me")
+        if bff_login_url:
+            # Microservice only: BFF login establishes the APPSESSION cookie.
+            bff_resp = session.post(
+                bff_login_url,
+                json={"userName": uid, "password": _PASSWORD},
+            )
+            if bff_resp.status_code != 200:
+                if attempt == 0:
+                    time.sleep(1)
+                    continue
+                pytest.fail(f"BFF login failed: {bff_resp.status_code} {bff_resp.text}")
 
-        # BFF login response is BffUserInfo (no tokens); get raw tokens via auth-service login.
-        # Use the same session so only one login exists — a second independent login can
-        # invalidate the first token and cause 403s on subsequent requests.
+            # Issue a GET so csrfCookieWebFilter writes the XSRF-TOKEN cookie.
+            session.get(bff_me_url)
+
+        # Raw-token login — use same session so only one login exists.
         login_resp = session.post(
-            f"{base_url}/login",
+            login_url,
             json={"userName": uid, "password": _PASSWORD},
         )
         if login_resp.status_code != 200:
-            pytest.fail(f"Auth-service login failed: {login_resp.status_code} {login_resp.text}")
+            pytest.fail(f"Auth login failed: {login_resp.status_code} {login_resp.text}")
 
         body = login_resp.json()
         xsrf_token = session.cookies.get("XSRF-TOKEN", "")
-        print(f"\n[conftest] BFF login cookies: {dict(session.cookies)}")
+        print(f"\n[conftest] login cookies: {dict(session.cookies)}")
         return {
             "accessToken":  body["response"]["accessToken"],
             "refreshToken": body["response"]["refreshToken"],
             "userName":     uid,
-            "session":      session,   # carries APPSESSION + XSRF-TOKEN cookies
+            "session":      session,
             "xsrfToken":    xsrf_token,
         }
     pytest.fail("Setup failed after retries")
 
 
 @pytest.fixture(scope="session")
-def auth_tokens(base_url):
-    return _setup_session_user(base_url)
+def auth_tokens(is_monolith):
+    if is_monolith:
+        return _setup_session_user(
+            register_url=_MONO_REGISTER_URL,
+            login_url=_MONO_LOGIN_URL,
+            bff_login_url=None,
+            bff_me_url=None,
+        )
+    return _setup_session_user(
+        register_url=_MS_REGISTER_URL,
+        login_url=_MS_LOGIN_URL,
+        bff_login_url=_MS_BFF_LOGIN_URL,
+        bff_me_url=_MS_BFF_ME_URL,
+    )
 
 
 @pytest.fixture(scope="session")
