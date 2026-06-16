@@ -196,7 +196,7 @@ def _email_payload(employee_id, tag="email"):
     return {
         "employeeId": employee_id,
         "email": f"{uid}@test.com",
-        "type": "WORK",
+        "type": 1,
         "isPrimary": True,
     }
 
@@ -310,7 +310,7 @@ class TestEmailAddresses:
         allure.dynamic.label("endpoint", "POST /email-addresses")
         allure.dynamic.tag("negative", "auth")
 
-        resp = requests.post(f"{emp_url}/email-addresses", json={"employeeId": 1, "email": "x@x.com", "type": "WORK", "isPrimary": True})
+        resp = requests.post(f"{emp_url}/email-addresses", json={"employeeId": 1, "email": "x@x.com", "type": 1, "isPrimary": True})
         assert resp.status_code in (401, 403, 404)
 
 
@@ -324,7 +324,7 @@ def _phone_payload(employee_id, tag="phone"):
     return {
         "employeeId": employee_id,
         "phoneNumber": f"555-{uid[:4]}-{uid[4:]}".ljust(12, "0")[:12],
-        "type": "MOBILE",
+        "type": 1,
         "isPrimary": True,
     }
 
@@ -448,7 +448,7 @@ class TestPhoneNumbers:
         allure.dynamic.label("endpoint", "POST /phone-numbers")
         allure.dynamic.tag("negative", "auth")
 
-        resp = requests.post(f"{emp_url}/phone-numbers", json={"employeeId": 1, "phoneNumber": "555-0000", "type": "MOBILE", "isPrimary": True})
+        resp = requests.post(f"{emp_url}/phone-numbers", json={"employeeId": 1, "phoneNumber": "555-0000", "type": 1, "isPrimary": True})
         assert resp.status_code in (401, 403, 404)
 
 
