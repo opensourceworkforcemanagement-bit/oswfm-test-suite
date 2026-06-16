@@ -305,8 +305,8 @@ class TestEmployeesRoles:
 # ===========================================================================
 
 def _perm_payload(tag="perm"):
-    uid = f"{tag}{int(_time.time() * 1000) % 10_000_000}"
-    return {"permissionTag": uid, "permissionName": f"Permission {uid}", "description": "Test permission"}
+    uid_int = int(_time.time() * 1000) % 10_000_000
+    return {"permissionTag": uid_int, "permissionName": f"Permission {tag}{uid_int}", "description": "Test permission"}
 
 
 @allure.suite("User Service – Reference Data")
@@ -356,7 +356,7 @@ class TestPermissions:
         _assert_crud(
             emp_url, "permissions",
             create_payload=_perm_payload("crud"),
-            update_payload={"permissionTag": "UPDATED", "permissionName": "Updated Perm", "description": "Updated"},
+            update_payload={"permissionTag": 9999999, "permissionName": "Updated Perm", "description": "Updated"},
             id_field="permissioinsId",
             authed_session=authed_session,
             auth_headers=auth_headers,
