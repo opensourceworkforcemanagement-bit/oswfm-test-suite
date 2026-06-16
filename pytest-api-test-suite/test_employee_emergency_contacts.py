@@ -247,7 +247,7 @@ def _create_email_address_for_employee(emp_url, authed_session, auth_headers, em
     payload = {
         "employeeId": employee_id,
         "email": f"{uid}@ec.test.com",
-        "type": "PERSONAL",
+        "type": 1,
         "isPrimary": False,
     }
     return _create_resource(emp_url, "email-addresses", payload, authed_session, auth_headers)
@@ -385,7 +385,7 @@ def _create_phone_number_for_employee(emp_url, authed_session, auth_headers, emp
     payload = {
         "employeeId": employee_id,
         "phoneNumber": f"555-{str(uid)[:4]}-{str(uid)[4:]}".ljust(12, "0")[:12],
-        "type": "MOBILE",
+        "type": 1,
         "isPrimary": False,
     }
     return _create_resource(emp_url, "phone-numbers", payload, authed_session, auth_headers)
